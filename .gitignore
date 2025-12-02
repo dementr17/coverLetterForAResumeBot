@@ -1,0 +1,34 @@
+# Secrets - игнорируем secrets.py в любой папке
+**/secrets.py
+coverLetterForAResumeBot/secrets.py
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Telegram Bot
+*.session
+*.session-journal
