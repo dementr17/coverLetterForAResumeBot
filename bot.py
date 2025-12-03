@@ -1,10 +1,17 @@
 # -*- coding: utf-8 -*-
 import os
 import logging
+from datetime import datetime, timedelta
+from collections import defaultdict
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from openai import OpenAI
-from secrets import BOT_TOKEN, CHATGPT_TOKEN
+from openai import OpenAI, RateLimitError, APIError, APIConnectionError, APITimeoutError
+from config import (
+    BOT_TOKEN, CHATGPT_TOKEN, ADMIN_ID,
+    OPENAI_MODEL, OPENAI_TEMPERATURE, OPENAI_MAX_TOKENS, OPENAI_TIMEOUT,
+    MAX_FILE_SIZE, MAX_RESUME_LENGTH, MAX_PDF_PAGES, MIN_RESUME_LENGTH,
+    MAX_REQUESTS_PER_MINUTE
+)
 import io
 
 # Настройка логирования
@@ -13,6 +20,9 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Rate limiting: словарь для хранения запросов пользователей
+user_requests = defaultdict(list)
 
 # Импорты для обработки файлов (с обработкой ошибок)
 try:
@@ -29,11 +39,8 @@ except ImportError:
     DOCX_SUPPORT = False
     logger.warning("python-docx не установлен. Поддержка DOCX файлов будет ограничена.")
 
-# ID администратора для уведомлений об ошибках
-ADMIN_ID = 292730940
-
-# Инициализация OpenAI клиента
-client = OpenAI(api_key=CHATGPT_TOKEN)
+# Инициализация OpenAI клиента с таймаутом
+client = OpenAI(api_key=CHATGPT_TOKEN, timeout=OPENAI_TIMEOUT)
 
 # Глобальная переменная для приложения (будет установлена при запуске)
 application_instance = None
@@ -62,6 +69,34 @@ CRITICAL INSTRUCTIONS:
 - Base the template on the resume information provided
 - Start directly with the template format: [Your Name] [Your City, Country]...
 """
+
+def check_rate_limit(user_id: int) -> bool:
+    """Проверка rate limit для пользователя"""
+    now = datetime.now()
+    # Очищаем старые запросы (старше 1 минуты)
+    user_requests[user_id] = [
+        req_time for req_time in user_requests[user_id]
+        if now - req_time < timedelta(minutes=1)
+    ]
+    
+    # Проверяем лимит
+    if len(user_requests[user_id]) >= MAX_REQUESTS_PER_MINUTE:
+        return False
+    
+    # Добавляем текущий запрос
+    user_requests[user_id].append(now)
+    return True
+
+def sanitize_resume_text(text: str) -> str:
+    """Очистка и валидация текста резюме"""
+    if len(text) > MAX_RESUME_LENGTH:
+        raise ValueError(f"Резюме слишком длинное (максимум {MAX_RESUME_LENGTH} символов)")
+    
+    # Удаляем потенциально опасные символы
+    text = text.replace('\x00', '')  # Null bytes
+    text = text[:MAX_RESUME_LENGTH]  # Обрезаем до лимита
+    
+    return text.strip()
 
 async def send_error_notification(error_message: str, user_info: str = "", error_type: str = "ERROR"):
     """Отправка уведомления об ошибке администратору"""
@@ -115,6 +150,17 @@ async def extract_text_from_file(file) -> str:
     try:
         # Получаем файл
         file_obj = await file.get_file()
+        
+        # Проверка размера файла
+        if file_obj.file_size and file_obj.file_size > MAX_FILE_SIZE:
+            logger.warning(f"Файл слишком большой: {file_obj.file_size} bytes (максимум {MAX_FILE_SIZE})")
+            await send_error_notification(
+                f"File too large: {file_obj.file_size} bytes",
+                f"File: {file.file_name if hasattr(file, 'file_name') else 'Unknown'}",
+                "WARNING: File Size Exceeded"
+            )
+            return None
+        
         file_content = await file_obj.download_as_bytearray()
         
         # Определяем тип файла
@@ -129,8 +175,20 @@ async def extract_text_from_file(file) -> str:
             try:
                 pdf_file = io.BytesIO(file_content)
                 pdf_reader = PyPDF2.PdfReader(pdf_file)
+                
+                # Проверка количества страниц
+                num_pages = len(pdf_reader.pages)
+                if num_pages > MAX_PDF_PAGES:
+                    logger.warning(f"PDF слишком большой: {num_pages} страниц (максимум {MAX_PDF_PAGES})")
+                    await send_error_notification(
+                        f"PDF too large: {num_pages} pages",
+                        f"File: {file_name}",
+                        "WARNING: PDF Too Large"
+                    )
+                    return None
+                
                 text = ""
-                for page in pdf_reader.pages:
+                for page in pdf_reader.pages[:MAX_PDF_PAGES]:  # Ограничиваем количество страниц
                     text += page.extract_text() + "\n"
                 return text.strip() if text.strip() else None
             except Exception as e:
@@ -190,16 +248,24 @@ async def generate_cover_letter(resume_text: str, user_id: int = None, username:
             )
             return error_msg
         
+        # Валидация и санитизация резюме
+        try:
+            resume_text = sanitize_resume_text(resume_text)
+        except ValueError as e:
+            logger.warning(f"Валидация резюме не прошла: {e}")
+            return None
+        
         full_prompt = f"{SYSTEM_PROMPT}\n\n{ADDITIONAL_INSTRUCTIONS}\n\nResume:\n{resume_text}"
         
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT + "\n\n" + ADDITIONAL_INSTRUCTIONS},
                 {"role": "user", "content": f"Generate a cover letter template based on this resume:\n\n{resume_text}"}
             ],
-            temperature=0.7,
-            max_tokens=1000
+            temperature=OPENAI_TEMPERATURE,
+            max_tokens=OPENAI_MAX_TOKENS,
+            timeout=OPENAI_TIMEOUT
         )
         
         cover_letter = response.choices[0].message.content.strip()
@@ -227,7 +293,40 @@ async def generate_cover_letter(resume_text: str, user_id: int = None, username:
         
         return cover_letter
         
-    except Exception as e:
+    except RateLimitError as e:
+        error_type = "RateLimitError"
+        error_message = str(e)
+        notification_type = "CRITICAL: OpenAI Rate Limit"
+        error_details = f"OpenAI Rate Limit Exceeded: {error_message}"
+        logger.error(f"Rate limit exceeded: {e}", exc_info=True)
+        
+        user_info = f"ID: {user_id}, Username: @{username}" if user_id else "Unknown user"
+        await send_error_notification(error_details, user_info, notification_type)
+        return None
+        
+    except APIConnectionError as e:
+        error_type = "APIConnectionError"
+        error_message = str(e)
+        notification_type = "CRITICAL: OpenAI Connection Error"
+        error_details = f"OpenAI Connection Error: {error_message}"
+        logger.error(f"Connection error: {e}", exc_info=True)
+        
+        user_info = f"ID: {user_id}, Username: @{username}" if user_id else "Unknown user"
+        await send_error_notification(error_details, user_info, notification_type)
+        return None
+        
+    except APITimeoutError as e:
+        error_type = "APITimeoutError"
+        error_message = str(e)
+        notification_type = "CRITICAL: OpenAI Timeout"
+        error_details = f"OpenAI API Timeout: {error_message}"
+        logger.error(f"API timeout: {e}", exc_info=True)
+        
+        user_info = f"ID: {user_id}, Username: @{username}" if user_id else "Unknown user"
+        await send_error_notification(error_details, user_info, notification_type)
+        return None
+        
+    except APIError as e:
         error_type = type(e).__name__
         error_message = str(e)
         
@@ -260,10 +359,10 @@ async def generate_cover_letter(resume_text: str, user_id: int = None, username:
             notification_type = "CRITICAL: Authentication Error"
             error_details = f"Authentication Error: {error_type}\n{error_message}"
         else:
-            notification_type = "ERROR: Generation Failed"
-            error_details = f"{error_type}: {error_message}"
+            notification_type = "CRITICAL: OpenAI API Error"
+            error_details = f"OpenAI API Error: {error_type}\n{error_message}"
         
-        logger.error(f"Ошибка при генерации письма: {e}", exc_info=True)
+        logger.error(f"OpenAI API error: {e}", exc_info=True)
         
         # Отправляем уведомление администратору
         user_info = f"ID: {user_id}, Username: @{username}" if user_id else "Unknown user"
@@ -278,6 +377,25 @@ async def generate_cover_letter(resume_text: str, user_id: int = None, username:
             return "REGION_BLOCKED"
         
         return None
+        
+    except ValueError as e:
+        # Ошибка валидации
+        logger.warning(f"Validation error: {e}")
+        return None
+        
+    except Exception as e:
+        # Неожиданные ошибки
+        error_type = type(e).__name__
+        error_message = str(e)
+        logger.error(f"Unexpected error in generate_cover_letter: {e}", exc_info=True)
+        
+        user_info = f"ID: {user_id}, Username: @{username}" if user_id else "Unknown user"
+        await send_error_notification(
+            f"Unexpected Error: {error_type}\n{error_message}",
+            user_info,
+            "ERROR: Unexpected Error"
+        )
+        return None
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик текстовых сообщений"""
@@ -287,12 +405,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_message.startswith('/'):
         return
     
-    # Проверяем минимальную длину резюме
-    if len(user_message.strip()) < 50:
+    # Получаем информацию о пользователе для rate limiting
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "N/A"
+    
+    # Проверка rate limit
+    if not check_rate_limit(user_id):
         await update.message.reply_text(
-            "⚠️ Текст резюме слишком короткий. "
-            "Пожалуйста, отправь полное резюме (минимум 50 символов) "
-            "для создания качественного шаблона."
+            "⏳ Слишком много запросов. Пожалуйста, подождите минуту перед следующим запросом."
+        )
+        logger.info(f"Rate limit exceeded for user {user_id} (@{username})")
+        return
+    
+    # Проверяем минимальную длину резюме
+    if len(user_message.strip()) < MIN_RESUME_LENGTH:
+        await update.message.reply_text(
+            f"⚠️ Текст резюме слишком короткий. "
+            f"Пожалуйста, отправь полное резюме (минимум {MIN_RESUME_LENGTH} символов) "
+            f"для создания качественного шаблона."
         )
         return
     
@@ -300,12 +430,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     processing_msg = await update.message.reply_text("⏳ Обрабатываю твоё резюме и создаю шаблон...")
     
     try:
-        # Получаем информацию о пользователе
-        user_id = update.effective_user.id
-        username = update.effective_user.username or "N/A"
+        # Валидация и санитизация резюме
+        try:
+            sanitized_message = sanitize_resume_text(user_message)
+        except ValueError as e:
+            await processing_msg.edit_text(
+                f"❌ {str(e)}\n\n"
+                f"Пожалуйста, отправь резюме короче {MAX_RESUME_LENGTH} символов."
+            )
+            return
         
         # Генерируем шаблон
-        cover_letter = await generate_cover_letter(user_message, user_id=user_id, username=username)
+        cover_letter = await generate_cover_letter(sanitized_message, user_id=user_id, username=username)
+        
+        # Логируем успешную генерацию
+        logger.info(f"User {user_id} (@{username}) successfully generated cover letter")
         
         if cover_letter == "REGION_BLOCKED":
             # Специальная обработка ошибки региона
@@ -358,6 +497,18 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик документов"""
     document = update.message.document
     
+    # Получаем информацию о пользователе для rate limiting
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "N/A"
+    
+    # Проверка rate limit
+    if not check_rate_limit(user_id):
+        await update.message.reply_text(
+            "⏳ Слишком много запросов. Пожалуйста, подождите минуту перед следующим запросом."
+        )
+        logger.info(f"Rate limit exceeded for user {user_id} (@{username})")
+        return
+    
     # Проверяем тип файла
     if document.file_name:
         file_ext = document.file_name.lower().split('.')[-1]
@@ -392,10 +543,20 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        if len(resume_text) < 50:
+        if len(resume_text) < MIN_RESUME_LENGTH:
             await processing_msg.edit_text(
-                "⚠️ Текст в файле слишком короткий. "
-                "Пожалуйста, убедись, что файл содержит полное резюме."
+                f"⚠️ Текст в файле слишком короткий. "
+                f"Пожалуйста, убедись, что файл содержит полное резюме (минимум {MIN_RESUME_LENGTH} символов)."
+            )
+            return
+        
+        # Валидация и санитизация резюме из файла
+        try:
+            resume_text = sanitize_resume_text(resume_text)
+        except ValueError as e:
+            await processing_msg.edit_text(
+                f"❌ {str(e)}\n\n"
+                f"Пожалуйста, отправь резюме короче {MAX_RESUME_LENGTH} символов."
             )
             return
         
@@ -405,6 +566,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Генерируем шаблон
         cover_letter = await generate_cover_letter(resume_text, user_id=user_id, username=username)
+        
+        # Логируем успешную генерацию
+        logger.info(f"User {user_id} (@{username}) successfully generated cover letter from file")
         
         if cover_letter == "REGION_BLOCKED":
             # Специальная обработка ошибки региона

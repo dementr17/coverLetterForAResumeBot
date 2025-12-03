@@ -25,24 +25,48 @@ git clone git@github.com:dementr17/coverLetterForAResumeBot.git
 cd coverLetterForAResumeBot
 ```
 
-### 2. Установка зависимостей
+### 2. Создание виртуального окружения (рекомендуется)
+
+Рекомендуется использовать виртуальное окружение для изоляции зависимостей проекта:
 
 ```bash
 # Убедитесь, что используете Python 3
 python3 --version
 
-# Установите зависимости
-python3 -m pip install -r requirements.txt
+# Создайте виртуальное окружение
+python3 -m venv venv
+
+# Активируйте виртуальное окружение
+# На macOS/Linux:
+source venv/bin/activate
+
+# На Windows:
+# venv\Scripts\activate
 ```
 
-Если возникают проблемы с установкой, попробуйте обновить pip:
+После активации виртуального окружения в начале строки терминала появится `(venv)`.
+
+### 3. Установка зависимостей
+
+```bash
+# Убедитесь, что виртуальное окружение активировано
+# (должно быть видно (venv) в начале строки)
+
+# Обновите pip (рекомендуется)
+pip install --upgrade pip
+
+# Установите зависимости
+pip install -r requirements.txt
+```
+
+**Примечание:** Если вы не используете виртуальное окружение, установите зависимости глобально:
 
 ```bash
 python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements.txt
 ```
 
-### 3. Настройка конфигурации
+### 4. Настройка конфигурации
 
 Создайте файл `secrets.py` в корне проекта:
 
@@ -59,13 +83,25 @@ CHATGPT_TOKEN = "ваш_openai_api_key"
 
 **Важно:** Файл `secrets.py` уже добавлен в `.gitignore` и не будет закоммичен в репозиторий.
 
-### 4. Настройка промпта
+### 5. Настройка промпта
 
 Файл `promt.txt` содержит шаблон для генерации сопроводительных писем. Вы можете изменить его по своему усмотрению.
 
 ## ▶️ Запуск бота
 
 ### Локальный запуск
+
+**Если используете виртуальное окружение:**
+
+```bash
+# Убедитесь, что виртуальное окружение активировано
+source venv/bin/activate
+
+# Запустите бота
+python3 bot.py
+```
+
+**Если не используете виртуальное окружение:**
 
 ```bash
 python3 bot.py
@@ -75,16 +111,26 @@ python3 bot.py
 
 ### Запуск в фоновом режиме (Linux/Mac)
 
+**С виртуальным окружением:**
+
 ```bash
-nohup python3 bot.py > bot.log 2>&1 &
+# Активируйте виртуальное окружение и запустите в фоне
+source venv/bin/activate && nohup python3 bot.py > bot.log 2>&1 &
 ```
 
-Или используйте `screen` или `tmux`:
+**Или используйте `screen` или `tmux`:**
 
 ```bash
 screen -S telegram_bot
+source venv/bin/activate
 python3 bot.py
 # Нажмите Ctrl+A, затем D для отсоединения
+```
+
+**Без виртуального окружения:**
+
+```bash
+nohup python3 bot.py > bot.log 2>&1 &
 ```
 
 ### Остановка бота
@@ -132,16 +178,37 @@ coverLetterForAResumeBot/
 ├── promt.txt           # Промпт для генерации шаблонов
 ├── requirements.txt    # Зависимости Python
 ├── secrets.py          # Токены и секреты (не коммитится)
+├── venv/               # Виртуальное окружение (создается при установке)
 └── README.md           # Этот файл
 ```
+
+**Примечание:** Папка `venv/` создается при создании виртуального окружения и не должна коммититься в репозиторий (уже в `.gitignore`).
 
 ## ⚠️ Решение проблем
 
 ### Ошибка "ModuleNotFoundError: No module named 'telegram'"
 
 Установите зависимости:
+
+**С виртуальным окружением:**
+```bash
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+**Без виртуального окружения:**
 ```bash
 python3 -m pip install -r requirements.txt
+```
+
+### Ошибка при установке зависимостей (PEP 668)
+
+Если видите ошибку, связанную с PEP 668, используйте виртуальное окружение:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```
 
 ### Ошибка "SyntaxError: Non-ASCII character"
