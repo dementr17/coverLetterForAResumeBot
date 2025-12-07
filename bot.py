@@ -90,7 +90,7 @@ def check_rate_limit(user_id: int) -> bool:
 def sanitize_resume_text(text: str) -> str:
     """Очистка и валидация текста резюме"""
     if len(text) > MAX_RESUME_LENGTH:
-        raise ValueError(f"Резюме слишком длинное (максимум {MAX_RESUME_LENGTH} символов)")
+        raise ValueError(f"Resume is too long (maximum {MAX_RESUME_LENGTH} characters)")
     
     # Удаляем потенциально опасные символы
     text = text.replace('\x00', '')  # Null bytes
@@ -240,9 +240,9 @@ async def generate_cover_letter(resume_text: str, user_id: int = None, username:
     """Генерация шаблона сопроводительного письма через OpenAI"""
     try:
         if not SYSTEM_PROMPT:
-            error_msg = "Ошибка: не удалось загрузить промпт. Пожалуйста, проверьте файл promt.txt"
+            error_msg = "Error: Failed to load prompt. Please check the promt.txt file"
             await send_error_notification(
-                "Не удалось загрузить промпт из файла promt.txt",
+                "Failed to load prompt from promt.txt file",
                 f"ID: {user_id}, Username: @{username}" if user_id else "",
                 "CRITICAL: Missing Prompt File"
             )
@@ -412,7 +412,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Проверка rate limit
     if not check_rate_limit(user_id):
         await update.message.reply_text(
-            "⏳ Слишком много запросов. Пожалуйста, подождите минуту перед следующим запросом."
+            "⏳ Too many requests. Please wait a minute before your next request."
         )
         logger.info(f"Rate limit exceeded for user {user_id} (@{username})")
         return
@@ -420,14 +420,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Проверяем минимальную длину резюме
     if len(user_message.strip()) < MIN_RESUME_LENGTH:
         await update.message.reply_text(
-            f"⚠️ Текст резюме слишком короткий. "
-            f"Пожалуйста, отправь полное резюме (минимум {MIN_RESUME_LENGTH} символов) "
-            f"для создания качественного шаблона."
+            f"⚠️ Resume text is too short.\n\n"
+            f"Please send a complete resume (minimum {MIN_RESUME_LENGTH} characters) "
+            f"to create a quality template.\n\n"
+            f"📝 Resume should include:\n"
+            f"• Personal information (name, contacts)\n"
+            f"• Work experience\n"
+            f"• Education\n"
+            f"• Skills and competencies\n\n"
+            f"The more detailed the resume, the better the template will be!"
         )
         return
     
     # Отправляем сообщение о обработке
-    processing_msg = await update.message.reply_text("⏳ Обрабатываю твоё резюме и создаю шаблон...")
+    processing_msg = await update.message.reply_text("⏳ Processing your resume and creating a template...")
     
     try:
         # Валидация и санитизация резюме
@@ -436,7 +442,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError as e:
             await processing_msg.edit_text(
                 f"❌ {str(e)}\n\n"
-                f"Пожалуйста, отправь резюме короче {MAX_RESUME_LENGTH} символов."
+                f"Please send a resume shorter than {MAX_RESUME_LENGTH} characters."
             )
             return
         
@@ -449,11 +455,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if cover_letter == "REGION_BLOCKED":
             # Специальная обработка ошибки региона
             await processing_msg.edit_text(
-                "❌ К сожалению, сервис OpenAI API недоступен в вашем регионе.\n\n"
-                "Это ограничение со стороны OpenAI. Для решения проблемы:\n"
-                "• Используйте VPN\n"
-                "• Обратитесь к администратору бота\n\n"
-                "Извините за неудобства."
+                "❌ Unfortunately, the OpenAI API service is not available in your region.\n\n"
+                "This is a limitation from OpenAI. To resolve the issue:\n"
+                "• Use a VPN\n"
+                "• Contact the bot administrator\n\n"
+                "Sorry for the inconvenience."
             )
         elif cover_letter:
             # Удаляем сообщение о обработке
@@ -469,8 +475,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text(part)
         else:
             await processing_msg.edit_text(
-                "❌ Произошла ошибка при генерации шаблона. "
-                "Пожалуйста, попробуй ещё раз или отправь резюме в другом формате."
+                "❌ An error occurred while generating the template. "
+                "Please try again or send the resume in a different format."
             )
             
     except Exception as e:
@@ -490,7 +496,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         await processing_msg.edit_text(
-            "❌ Произошла ошибка. Пожалуйста, попробуй ещё раз."
+            "❌ An error occurred. Please try again."
         )
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -504,7 +510,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Проверка rate limit
     if not check_rate_limit(user_id):
         await update.message.reply_text(
-            "⏳ Слишком много запросов. Пожалуйста, подождите минуту перед следующим запросом."
+            "⏳ Too many requests. Please wait a minute before your next request."
         )
         logger.info(f"Rate limit exceeded for user {user_id} (@{username})")
         return
@@ -515,19 +521,19 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if file_ext not in ['txt', 'pdf', 'docx']:
             if file_ext == 'doc':
                 await update.message.reply_text(
-                    "📄 Файлы формата DOC (старый формат Word) не поддерживаются.\n"
-                    "Пожалуйста, конвертируй файл в DOCX или PDF, "
-                    "или отправь резюме текстом."
+                    "📄 DOC format files (old Word format) are not supported.\n"
+                    "Please convert the file to DOCX or PDF, "
+                    "or send the resume as text."
                 )
             else:
                 await update.message.reply_text(
-                    "📄 Пожалуйста, отправь резюме в формате TXT, PDF или DOCX.\n"
-                    "Или просто скопируй текст резюме и отправь сообщением."
+                    "📄 Please send the resume in TXT, PDF, or DOCX format.\n"
+                    "Or simply copy the resume text and send it as a message."
                 )
             return
     
     # Отправляем сообщение о обработке
-    processing_msg = await update.message.reply_text("⏳ Обрабатываю файл и создаю шаблон...")
+    processing_msg = await update.message.reply_text("⏳ Processing the file and creating a template...")
     
     try:
         # Извлекаем текст из файла
@@ -535,18 +541,24 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if not resume_text:
             await processing_msg.edit_text(
-                "❌ Не удалось извлечь текст из файла. "
-                "Возможные причины:\n"
-                "• Файл повреждён или защищён\n"
-                "• Файл в неподдерживаемом формате\n\n"
-                "Пожалуйста, отправь резюме текстом или попробуй другой файл."
+                "❌ Failed to extract text from the file. "
+                "Possible reasons:\n"
+                "• File is corrupted or protected\n"
+                "• File is in an unsupported format\n\n"
+                "Please send the resume as text or try a different file."
             )
             return
         
         if len(resume_text) < MIN_RESUME_LENGTH:
             await processing_msg.edit_text(
-                f"⚠️ Текст в файле слишком короткий. "
-                f"Пожалуйста, убедись, что файл содержит полное резюме (минимум {MIN_RESUME_LENGTH} символов)."
+                f"⚠️ Text in the file is too short.\n\n"
+                f"Please make sure the file contains a complete resume (minimum {MIN_RESUME_LENGTH} characters).\n\n"
+                f"📝 Resume should include:\n"
+                f"• Personal information (name, contacts)\n"
+                f"• Work experience\n"
+                f"• Education\n"
+                f"• Skills and competencies\n\n"
+                f"The more detailed the resume, the better the template will be!"
             )
             return
         
@@ -556,7 +568,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError as e:
             await processing_msg.edit_text(
                 f"❌ {str(e)}\n\n"
-                f"Пожалуйста, отправь резюме короче {MAX_RESUME_LENGTH} символов."
+                f"Please send a resume shorter than {MAX_RESUME_LENGTH} characters."
             )
             return
         
@@ -573,11 +585,11 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if cover_letter == "REGION_BLOCKED":
             # Специальная обработка ошибки региона
             await processing_msg.edit_text(
-                "❌ К сожалению, сервис OpenAI API недоступен в вашем регионе.\n\n"
-                "Это ограничение со стороны OpenAI. Для решения проблемы:\n"
-                "• Используйте VPN\n"
-                "• Обратитесь к администратору бота\n\n"
-                "Извините за неудобства."
+                "❌ Unfortunately, the OpenAI API service is not available in your region.\n\n"
+                "This is a limitation from OpenAI. To resolve the issue:\n"
+                "• Use a VPN\n"
+                "• Contact the bot administrator\n\n"
+                "Sorry for the inconvenience."
             )
         elif cover_letter:
             # Удаляем сообщение о обработке
@@ -593,8 +605,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text(part)
         else:
             await processing_msg.edit_text(
-                "❌ Произошла ошибка при генерации шаблона. "
-                "Пожалуйста, попробуй отправить резюме текстом."
+                "❌ An error occurred while generating the template. "
+                "Please try sending the resume as text."
             )
             
     except Exception as e:
@@ -614,28 +626,28 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         await processing_msg.edit_text(
-            "❌ Произошла ошибка при обработке файла. "
-            "Пожалуйста, попробуй отправить резюме текстом."
+            "❌ An error occurred while processing the file. "
+            "Please try sending the resume as text."
         )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик фотографий (резюме может быть отправлено как фото)"""
     await update.message.reply_text(
-        "📸 Я вижу, что ты отправил фото. "
-        "К сожалению, я пока не умею обрабатывать изображения.\n\n"
-        "Пожалуйста, отправь резюме одним из способов:\n"
-        "• Скопируй текст резюме и отправь сообщением\n"
-        "• Отправь файл с резюме (PDF, DOC, DOCX, TXT)"
+        "📸 I see you sent a photo. "
+        "Unfortunately, I cannot process images yet.\n\n"
+        "Please send your resume in one of the following ways:\n"
+        "• Copy the resume text and send it as a message\n"
+        "• Send a resume file (PDF, DOC, DOCX, TXT)"
     )
 
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик неизвестных типов сообщений"""
     await update.message.reply_text(
-        "🤔 Я не могу обработать этот тип сообщения.\n\n"
-        "Пожалуйста, отправь резюме одним из способов:\n"
-        "• Скопируй текст резюме и отправь сообщением\n"
-        "• Отправь файл с резюме (PDF, DOC, DOCX, TXT)\n\n"
-        "Используй /help для получения подробной информации."
+        "🤔 I cannot process this type of message.\n\n"
+        "Please send your resume in one of the following ways:\n"
+        "• Copy the resume text and send it as a message\n"
+        "• Send a resume file (PDF, DOC, DOCX, TXT)\n\n"
+        "Use /help for detailed information."
     )
 
 def main():
